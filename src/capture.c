@@ -105,7 +105,7 @@ CStatus_t capAllocateBuffers(App_t *app, int nums)
 			struct v4l2_exportbuffer expbuf = (struct v4l2_exportbuffer) {0} ;
 			expbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
 			expbuf.index = i;
-			expbuf.flags = O_CLOEXEC;
+			expbuf.flags = O_CLOEXEC | O_RDWR;
 			ret = ioctl(app->v4l2fd, VIDIOC_EXPBUF, &expbuf);
 			OKAY_RETURN(ret < 0, CSTATUS_FAIL, "VIDIOC_EXPBUF failed : index %d, %s\n", i, ERRSTR);
 			
@@ -268,6 +268,8 @@ int main()
 		int fd_flags = fcntl(app.v4l2fd, F_GETFL);
 		fcntl(app.v4l2fd, F_SETFL, fd_flags | O_NONBLOCK);
 		bool quit = false;
+		int state = 0;
+		int lastBuffer = -1;
 		while (!quit)
 		{
 			fd_set read_fds;
@@ -298,8 +300,17 @@ int main()
 					//TODO: Check return of Update Texture
 					capDrawFrameFromBufferIndex(&app, buf1->index);
 
-					status = capQueueByIndex(&app, buf1->index);
-					OKAY_STOP(status != CSTATUS_SUCCESS, "failed to enqueue : %d\n", buf1->index);
+					if(state == 0)
+					{
+						state = 1;
+						lastBuffer =  buf1->index;
+					}
+					else
+					{
+						status = capQueueByIndex(&app, lastBuffer);
+						lastBuffer = buf1->index;
+						OKAY_STOP(status != CSTATUS_SUCCESS, "failed to enqueue : %d\n", buf1->index);
+					}
 				}
 				else
 				{

@@ -7,28 +7,19 @@
  * Shaders included in code for simplicity but could be external files.
  */
 static const char passthrough_vertex_code[] =
-	"#version 300 es\n"
-	"//VERTEX_SHADER\n"
-	"layout(location = 0) in vec4 a_position;\n"
-	"layout(location = 1) in vec2 a_tex_coord;\n"
-	"out vec2 v_tex_coord;\n"
-	"void main()\n"
-	"{\n"
-	"   gl_Position = a_position;\n"
-	"   v_tex_coord = a_tex_coord;\n"
-	"}\n";
+	 "attribute vec4 pos;\n"
+      "\n"
+      "void main() {\n"
+      "  gl_Position = pos;\n"
+      "}\n";
 /**
  * fragment shader, second stage draw camera texture on each point in the window.
  * Shaders included in code for simplicity but could be external files.
  */
 static const char nv24_fragment_code[] =
-	"#version 300 es\n"
-	"//FRAGMENT_SHADER\n"
+    "#extension GL_OES_EGL_image_external : require\n"
 	"precision mediump float;\n"
-	"// position lookup used for both textures\n"
-	"in vec2 v_tex_coord;\n"
 	"// Output of the shader, RGB color per position in surface\n"
-	"layout(location = 0) out vec4 out_color;\n"
 	"// Additive offset for BT656 YUV to RGB transform.\n"
 	"const vec3 offset = vec3(0, -0.5, -0.5);\n"
 	"// Column order vector gain for BT656 YUV to RGB transform\n"
@@ -40,22 +31,22 @@ static const char nv24_fragment_code[] =
 	"// Temporary variable for YUV value\n"
 	"vec3 yuv;\n"
 	"// Temporary variable for RGB value\n"
-	"vec3 rgb;\n"
-	"// Two used textures to hold the YUV420 Semi semi-planar data\n"
-	"// The luma texture holds three copies of the Y value in fields r,g,b or x,y,z, and 1.0 for w\n"
-	"uniform sampler2D s_luma_texture;\n"
-	"// The chroma texture holds three copies of the CR value in fields or x,y,z, and CB in w\n"
-	"uniform sampler2D s_chroma_texture;\n"
+	"vec4 rgb;\n"
+	"uniform samplerExternalOES s;\n"
 	"void main()\n"
 	"{\n"
 	"    // Lookup the texture at the  position in the render window.\n"
 	"    // Take the two semi-planar textures assemble into single YUV pixel.\n"
-	"    yuv.x = texture2D(s_luma_texture, v_tex_coord).x;\n"
-	"    yuv.yz = texture2D(s_chroma_texture, v_tex_coord).xw;\n"
-	"    // Then convert to YUV to RGB using offset and gain.\n"
-	"    yuv += offset;\n"
-	"    rgb = coeff * yuv;\n"
-	"    out_color = vec4(rgb,1);\n"
+	// "    yuv.x = texture2D(s, v_tex_coord).x;\n"
+	// "    // Then convert to YUV to RGB using offset and gain.\n"
+	// "    yuv += offset;\n"
+	// "    rgb = coeff * yuv;\n"
+    "    if ( gl_FragCoord.x > 1000.0) {"
+    "       gl_FragColor = vec4(1,0,0,1); "
+    "    } else  {"
+    "       gl_FragColor = texture2D(s, gl_FragCoord.xy);\n"
+    "    }"
+	// "    gl_FragColor = vec4(rgb,1);\n"
 	"}\n";
 
 
@@ -79,17 +70,24 @@ static CStatus_t displaySetupTexture(Display_t *disp)
 	 * The texture co-ordinate boundaries are interleaved with the triangle data for compactness in GPU memory.
 	 *
 	 */
-	GLfloat vertices[] = {
-		-1.0f, 1.0f, 0.0f,  /* Triangle 0/1, index 0, upper left */
-		0.0f, 0.0f,         /* Texture lower left */
-		-1.0f, -1.0f, 0.0f, /* Triangle 0, index 1, lower left */
-		0.0f, 1.0f,         /* Texture upper left */
-		1.0f, -1.0f, 0.0f,  /* Triangle 0/1, index 2, lower right */
-		1.0f, 1.0f,         /* Texture upper right */
-		1.0f, 1.0f, 0.0f,   /* Triangle 1, index 3, upper right */
-		1.0f, 0.0f          /* Texture lower right */
-	};
-	GLushort indices[] = {0, 1, 2, 0, 2, 3};
+	// GLfloat vertices[] = {
+	// 	-1.0f, 1.0f, 0.0f,  /* Triangle 0/1, index 0, upper left */
+	// 	0.0f, 0.0f,         /* Texture lower left */
+	// 	-1.0f, -1.0f, 0.0f, /* Triangle 0, index 1, lower left */
+	// 	0.0f, 1.0f,         /* Texture upper left */
+	// 	1.0f, -1.0f, 0.0f,  /* Triangle 0/1, index 2, lower right */
+	// 	1.0f, 1.0f,         /* Texture upper right */
+	// 	1.0f, 1.0f, 0.0f,   /* Triangle 1, index 3, upper right */
+	// 	1.0f, 0.0f          /* Texture lower right */
+	// };
+	// GLushort indices[] = {0, 1, 2, 0, 2, 3};
+
+    static const float verts[] = {
+        -1, -1,
+        1, -1,
+        1, 1,
+        -1, 1,
+    };
 
 	/*
 	 * Compile the shader program, consisting of both a vertex and fragment shader.
@@ -101,112 +99,120 @@ static CStatus_t displaySetupTexture(Display_t *disp)
 	disp->program = gles_load_program(passthrough_vertex_code, nv24_fragment_code);
 	OKAY_RETURN(!disp->program, CSTATUS_FAIL, "Unable to load program\n");
 
-	/*
-	 * Get a handle to the s_luma_texture variable in the fragment shader.
-	 * This handle is used to update the texture with each new camera frame.
-	 */
-	disp->location[0] = glGetUniformLocation(disp->program, "s_luma_texture");
-	OKAY_RETURN(disp->location[0] == -1, CSTATUS_FAIL, "Unable to get location program %s\n", string_gl_error(glGetError()));
-	/*
-	 * Get a handle to the s_chroma_texture variable in the fragment shader.
-	 * This handle is used to update the texture with each new camera frame.
-	 */
-	disp->location[1] = glGetUniformLocation(disp->program, "s_chroma_texture");
-	OKAY_RETURN(disp->location[1] == -1, CSTATUS_FAIL, "Unable to get location program %s\n", string_gl_error(glGetError()));
+	// /*
+	//  * Get a handle to the s_luma_texture variable in the fragment shader.
+	//  * This handle is used to update the texture with each new camera frame.
+	//  */
+	// disp->location[0] = glGetUniformLocation(disp->program, "s_luma_texture");
+	// OKAY_RETURN(disp->location[0] == -1, CSTATUS_FAIL, "Unable to get location program %s\n", string_gl_error(glGetError()));
+	// /*
+	//  * Get a handle to the s_chroma_texture variable in the fragment shader.
+	//  * This handle is used to update the texture with each new camera frame.
+	//  */
+	// disp->location[1] = glGetUniformLocation(disp->program, "s_chroma_texture");
+	// OKAY_RETURN(disp->location[1] == -1, CSTATUS_FAIL, "Unable to get location program %s\n", string_gl_error(glGetError()));
 
-	/*
-	 * Create a new vertex array. A group of vertices and indices stored in GPU memory.
-	 * The frame being drawn is static fro the program duration, upload all the information
-	 * to the GPU at the beginning then reference the location each frame without copying the data each frame.
-	 */
-	glGenVertexArrays(1, &disp->vertexArray);
-	/* Select the vertex array that was just created and bind the new vertex buffers to the array */
-	glBindVertexArray(disp->vertexArray);
+	// /*
+	//  * Create a new vertex array. A group of vertices and indices stored in GPU memory.
+	//  * The frame being drawn is static fro the program duration, upload all the information
+	//  * to the GPU at the beginning then reference the location each frame without copying the data each frame.
+	//  */
+	// glGenVertexArrays(1, &disp->vertexArray);
+	// /* Select the vertex array that was just created and bind the new vertex buffers to the array */
+	// glBindVertexArray(disp->vertexArray);
 
 
-	/*
-	 * Generate a vertex buffers in GPU memory
-	 * The first buffer is for the vertex data and the second buffer is for the index data.
-	 */
-	glGenBuffers(2, disp->vertexBuffers);
+	// /*
+	//  * Generate a vertex buffers in GPU memory
+	//  * The first buffer is for the vertex data and the second buffer is for the index data.
+	//  */
+	// glGenBuffers(2, disp->vertexBuffers);
 
-	/* Bind the first vertex buffer with the vertices to the vertex array */
-	glBindBuffer(GL_ARRAY_BUFFER, disp->vertexBuffers[0]);
-	glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+	// /* Bind the first vertex buffer with the vertices to the vertex array */
+	// glBindBuffer(GL_ARRAY_BUFFER, disp->vertexBuffers[0]);
+	// glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
-	/* Bind the second vertex buffer with the indices to the vertex array */
-	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, disp->vertexBuffers[1]);
-	glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
+	// /* Bind the second vertex buffer with the indices to the vertex array */
+	// glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, disp->vertexBuffers[1]);
+	// glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW);
 
-	/* Enable a_position (location 0) in the shader */
-	glEnableVertexAttribArray(0);
-	/* Enable a_tex_coord (location 1) in the shader */
-	glEnableVertexAttribArray(1);
+	// /* Enable a_position (location 0) in the shader */
+	// glEnableVertexAttribArray(0);
+	// /* Enable a_tex_coord (location 1) in the shader */
+	// glEnableVertexAttribArray(1);
 
-	/* Copy the vertices to the GPU to be used in a_position */
-	glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(GLfloat), 0);
-    error = glGetError();
-	OKAY_RETURN(error != GL_NO_ERROR, CSTATUS_FAIL, "Use glVertexAttribPointer 0 %s\n", string_gl_error(error));
+	// /* Copy the vertices to the GPU to be used in a_position */
+	// glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(GLfloat), 0);
+    // error = glGetError();
+	// OKAY_RETURN(error != GL_NO_ERROR, CSTATUS_FAIL, "Use glVertexAttribPointer 0 %s\n", string_gl_error(error));
 
-	/* Copy the texture co-ordinates to the GPU to be used in a_tex_coord */
-	glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(GLfloat), (const void*)(3 * sizeof(GLfloat)));
-	error = glGetError();
-    OKAY_RETURN(error != GL_NO_ERROR, CSTATUS_FAIL,"Use glVertexAttribPointer 1 %s\n", string_gl_error(error));
+	// /* Copy the texture co-ordinates to the GPU to be used in a_tex_coord */
+	// glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(GLfloat), (const void*)(3 * sizeof(GLfloat)));
+	// error = glGetError();
+    // OKAY_RETURN(error != GL_NO_ERROR, CSTATUS_FAIL,"Use glVertexAttribPointer 1 %s\n", string_gl_error(error));
 
-	/* Select the default vertex array, allowing the application's array to be unbound */
-	glBindVertexArray(0);
+	// /* Select the default vertex array, allowing the application's array to be unbound */
+	// glBindVertexArray(0);
 
-	/* Generate two textures, the first for luma data, the second for chroma data */
-	glGenTextures(2, disp->texture);
-	glBindTexture(GL_TEXTURE_2D, disp->texture[0]);
-	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-	/*
-	 * Generate the space in the GPU for the luma texture, don't initialize the data.
-	 * The data in the memory will be updated in the render function.
-	 * Each texture has four components, x,y,z,w alias r,g,b,a alias s,r,t,u.
-	 * Luma will be replicated in x, y, and z using type GL_LUMINCANCE. Component w is set to 1.0.
-	 * The resolution of the texture matches the number of active pixels.
-	 */
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, disp->width, disp->height, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, NULL);
-	error = glGetError();
-    OKAY_RETURN(error != GL_NO_ERROR, CSTATUS_FAIL,"Unable to generate texture %s\n", string_gl_error(error));
+	// /* Generate two textures, the first for luma data, the second for chroma data */
+	// glGenTextures(2, disp->texture);
+	// glBindTexture(GL_TEXTURE_2D, disp->texture[0]);
+	// glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	// /*
+	//  * Generate the space in the GPU for the luma texture, don't initialize the data.
+	//  * The data in the memory will be updated in the render function.
+	//  * Each texture has four components, x,y,z,w alias r,g,b,a alias s,r,t,u.
+	//  * Luma will be replicated in x, y, and z using type GL_LUMINCANCE. Component w is set to 1.0.
+	//  * The resolution of the texture matches the number of active pixels.
+	//  */
+	// glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE, disp->width, disp->height, 0, GL_LUMINANCE, GL_UNSIGNED_BYTE, NULL);
+	// error = glGetError();
+    // OKAY_RETURN(error != GL_NO_ERROR, CSTATUS_FAIL,"Unable to generate texture %s\n", string_gl_error(error));
 
-	/*
-	 * Select the nearest texture value when the location doesn't match the exact texture position
-	 * This shouldn't occur if the texture matches the surface size.
-	 */
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+	// /*
+	//  * Select the nearest texture value when the location doesn't match the exact texture position
+	//  * This shouldn't occur if the texture matches the surface size.
+	//  */
+	// glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	// glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-	/*
-	 * Generate the space in the GPU for the chroma texture, don't initialize the data.
-	 * The data in the memory will be updated in the render function.
-	 * Each texture has four components, x,y,z,w alias r,g,b,a alias s,r,t,u.
-	 * Cb is will be replicated in x, y, and z. Cr will be assigned to w. with type GL_LUMINANCE_ALPHA.
-	 * There is one pair of chroma values for every four luma pixels.
-	 * Half the vertical resoulution and half the horizontal resolution.
-	 * Each GL_LUMINCANCE_ALPHA lookup will contain one pixel of chroma.
-	 * The texture lookup will replicate the chroma values up to the total resolution.
-	 */
-	glBindTexture(GL_TEXTURE_2D, disp->texture[1]);
-	glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-	glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, disp->width, disp->height, 0, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, NULL);
-	error = glGetError();
-	OKAY_RETURN(error != GL_NO_ERROR, CSTATUS_FAIL,"Unable to generate texture %s\n", string_gl_error(error));
+	// /*
+	//  * Generate the space in the GPU for the chroma texture, don't initialize the data.
+	//  * The data in the memory will be updated in the render function.
+	//  * Each texture has four components, x,y,z,w alias r,g,b,a alias s,r,t,u.
+	//  * Cb is will be replicated in x, y, and z. Cr will be assigned to w. with type GL_LUMINANCE_ALPHA.
+	//  * There is one pair of chroma values for every four luma pixels.
+	//  * Half the vertical resoulution and half the horizontal resolution.
+	//  * Each GL_LUMINCANCE_ALPHA lookup will contain one pixel of chroma.
+	//  * The texture lookup will replicate the chroma values up to the total resolution.
+	//  */
+	// glBindTexture(GL_TEXTURE_2D, disp->texture[1]);
+	// glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+	// glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, disp->width, disp->height, 0, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, NULL);
+	// error = glGetError();
+	// OKAY_RETURN(error != GL_NO_ERROR, CSTATUS_FAIL,"Unable to generate texture %s\n", string_gl_error(error));
 	
-    /*
-	 * Select the nearest texture value when the location doesn't match the exact texture position.
-	 * This will occur since the texture is a quarter the size of the surface size.
-	 */
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    // /*
+	//  * Select the nearest texture value when the location doesn't match the exact texture position.
+	//  * This will occur since the texture is a quarter the size of the surface size.
+	//  */
+	// glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	// glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-	/*
-	 * Select an orange color that is distict from the native window.
-	 * If the render fails an orange screen will appear.
-	 * If render never reached then a white screen will appear.
-	 */
-	glClearColor ( 1.0f, 0.6f, 0.0f, 0.0f );
+    glGenBuffers(1, &disp->vertexArray);
+    glBindBuffer(GL_ARRAY_BUFFER, disp->vertexArray);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STATIC_DRAW);
+    
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), 0);
+    glEnableVertexAttribArray(0);
+
+	// /*
+	//  * Select an orange color that is distict from the native window.
+	//  * If the render fails an orange screen will appear.
+	//  * If render never reached then a white screen will appear.
+	//  */
+	//glClearColor ( 1.0f, 0.6f, 0.0f, 0.0f );
+    glUseProgram(disp->program);
 }
 
 Display_t *displayCreate(int width, int height)
@@ -348,17 +354,17 @@ CStatus_t displayInitBuffer(Display_t *d, Buffer_t *b)
     // EGL (extension: EGL_EXT_image_dma_buf_import): Create EGL image from file descriptor (texture_dmabuf_fd) and storage
 	// data (texture_storage_metadata)
 	const EGLint attributeList[] = {
-		EGL_LINUX_DRM_FOURCC_EXT, DRM_FORMAT_NV12,
+		EGL_LINUX_DRM_FOURCC_EXT, DRM_FORMAT_ARGB1555,
 		EGL_WIDTH, d->width,
 		EGL_HEIGHT, d->height,
 
 		EGL_DMA_BUF_PLANE0_FD_EXT, b->dmafd[0],
 		EGL_DMA_BUF_PLANE0_OFFSET_EXT, 0,
-		EGL_DMA_BUF_PLANE0_PITCH_EXT, d->width,
+		EGL_DMA_BUF_PLANE0_PITCH_EXT, d->width * 2,
 
-		EGL_DMA_BUF_PLANE1_FD_EXT, b->dmafd[0],
-		EGL_DMA_BUF_PLANE1_OFFSET_EXT, d->width * d->height,
-		EGL_DMA_BUF_PLANE1_PITCH_EXT, d->width,
+		// EGL_DMA_BUF_PLANE1_FD_EXT, b->dmafd[0],
+		// EGL_DMA_BUF_PLANE1_OFFSET_EXT, d->width * d->height,
+		// EGL_DMA_BUF_PLANE1_PITCH_EXT, d->width,
 	
 		// EGL_DMA_BUF_PLANE0_MODIFIER_LO_EXT, (uint32_t)(texture_storage_metadata.modifiers & ((((uint64_t)1) << 33) - 1)),
 		// EGL_DMA_BUF_PLANE0_MODIFIER_HI_EXT, (uint32_t)((texture_storage_metadata.modifiers>>32) & ((((uint64_t)1) << 33) - 1)),
@@ -374,89 +380,134 @@ CStatus_t displayInitBuffer(Display_t *d, Buffer_t *b)
 	OKAY_RETURN(glError != EGL_SUCCESS || b->image == NULL, CSTATUS_FAIL, "egl image failed to create.\n");
 
 	// GLES (extension: GL_OES_EGL_image_external): Create GL texture from EGL image
-	glBindTexture(GL_TEXTURE_2D,0);
+	//glBindTexture(GL_TEXTURE_2D, 0);
 	glGenTextures(1, &b->texture);
 	glError =  eglGetError();
 
 	glBindTexture(GL_TEXTURE_2D, b->texture);
 	glError =  eglGetError();
 
+	glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, b->image);
+	glError =  eglGetError();
+
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
 	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-	glEGLImageTargetTexture2DOES(GL_TEXTURE_2D, b->image);
-	glError =  eglGetError();
+	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 256, 256, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+
+	PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress( "eglDestroyImageKHR" );
+    eglDestroyImageKHR(d->eglDpy, b->image);
 
 	return CSTATUS_SUCCESS;
 }
 
+void fillColorRGB888(Display_t *disp, Buffer_t *b)
+{
+	for(int i = 0; i < disp->height; i++)
+	{
+		for(int j = 0; j < disp->width; j++)
+		{
+			int index = j * 3;;
+			char *pixel = ((char *)b->ptr) + (i * disp->height) + index;
+
+			*(pixel + 0) = 0x00;
+			*(pixel + 1) = 0xFF;
+			*(pixel + 2) = 0x00;
+		}
+	}
+}
+
+void fillColorAR15(Display_t *disp, Buffer_t *b)
+{
+	for(int i = 0; i < disp->height; i++)
+	{
+		for(int j = 0; j < disp->width; j++)
+		{
+			int index = j * 2;;
+			char *pixel = ((char *)b->ptr[0]) + (i * disp->height) + index;
+
+			*(pixel + 0) = 0xF0;
+			*(pixel + 1) = 0x0F;
+		}
+	}
+}
 
 CStatus_t displayDraw(Display_t *disp, Buffer_t *b)
 {
     int ret = 0;
     GLenum error = 0;
-    glViewport(0, 0, disp->width, disp->height);
+    //glViewport(0, 0, disp->width, disp->height);
 	/*
 	 * Only the color buffer is used. (The depth, and stencil buffers are unused.)
 	 * Set it to the background color before rendering.
 	 */
-	glClear(GL_COLOR_BUFFER_BIT);
+	//glClear(GL_COLOR_BUFFER_BIT);
 	/** Select the NV12 Shader program compiled in the setup routine */
-	glUseProgram(disp->program);
-	error = glGetError();
-    OKAY_RETURN(error != GL_NO_ERROR, CSTATUS_FAIL,"Use program %s\n", string_gl_error(error));
+	//glUseProgram(disp->program);
+	//error = glGetError();
+    //OKAY_RETURN(error != GL_NO_ERROR, CSTATUS_FAIL,"Use program %s\n", string_gl_error(error));
 
-	/* Select the vertex array which includes the vertices and indices describing the window rectangle. */
-	glBindVertexArray(disp->vertexArray);
+	// /* Select the vertex array which includes the vertices and indices describing the window rectangle. */
+	// glBindVertexArray(disp->vertexArray);
 
 
-	/*
-	 * Copy the Luma data from plane 0 to the s_luma_texture texture in the GPU.
-	 * Each texture has four components, x,y,z,w alias r,g,b,a alias s,r,t,u.
-	 * Luma will be replicated in x, y, and z using type GL_LUMINCANCE. Component w is set to 1.0.
-	 * The resolution of the texture matches the number of active pixels.
-	 */
+	// /*
+	//  * Copy the Luma data from plane 0 to the s_luma_texture texture in the GPU.
+	//  * Each texture has four components, x,y,z,w alias r,g,b,a alias s,r,t,u.
+	//  * Luma will be replicated in x, y, and z using type GL_LUMINCANCE. Component w is set to 1.0.
+	//  * The resolution of the texture matches the number of active pixels.
+	//  */
+	// glActiveTexture(GL_TEXTURE0);
+	// glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, disp->width, disp->height,
+	// 	            GL_LUMINANCE, GL_UNSIGNED_BYTE, b->ptr[0]);
+	// error = glGetError();
+	// glBindTexture(GL_TEXTURE_2D, disp->texture[0]);
+	// /* Indicate that GL_TEXTURE0 is s_luma_texture from previous lookup */
+	// glUniform1i(disp->location[0], 0);
+
+	// /*
+	//  * Copy the chroma data from plane 1 to the s_chroma_texture texture in the GPU.
+	//  * Each texture has four components, x,y,z,w alias r,g,b,a alias s,r,t,u.
+	//  * Cb is will be replicated in x, y, and z. Cr will be assigned to w. with type GL_LUMINANCE_ALPHA.
+	//  * There is one pair of chroma values for every four luma pixels.
+	//  * Half the vertical resoulution and half the horizontal resolution.
+	//  * Each GL_LUMINCANCE_ALPHA lookup will contain one pixel of chroma.
+	//  * The texture lookup will replicate the chroma values up to the total resolution.
+	//  */
+	// glActiveTexture(GL_TEXTURE1);
+	// glTexSubImage2D(GL_TEXTURE_2D, 0,
+	// 	0, 0, disp->width, disp->height,
+	// 	GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE,  b->ptr[0] + (disp->width * disp->height));
+	// error = glGetError();
+	// glBindTexture(GL_TEXTURE_2D, disp->texture[1]);
+	// /* Indicate that GL_TEXTURE1 is s_chroma_texture from previous lookup */
+	// glUniform1i(disp->location[1], 1);
+
+	// /*
+	//  * Draw the two triangles from 6 indices to form a rectangle from the data in the vertex array.
+	//  * The fourth parameter, indices value here is passed as null since the values are already
+	//  * available in the GPU memory through the vertex array
+	//  * GL_TRIANGLES - draw each set of three vertices as an individual trianvle.
+	//  */
+	// glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+	// /** Select the default vertex array, allowing the applications array to be unbound */
+	// glBindVertexArray(0);
+
+	// /*
+	//  * display the new camera frame after render is complete at the next vertical sync
+	//  * This is drawn on the EGL surface which matches the full screen native window.
+	//  */
+	// ret = eglSwapBuffers(disp->eglDpy, disp->eglSurf);
+
+
+    //glClearColor(0.5, 0.5, 0.5, 0.5);
+    //glClear(GL_COLOR_BUFFER_BIT);
+
+	fillColorAR15(disp, b);
 	glActiveTexture(GL_TEXTURE0);
-	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, disp->width, disp->height,
-		            GL_LUMINANCE, GL_UNSIGNED_BYTE, b->ptr[0]);
-	error = glGetError();
-	glBindTexture(GL_TEXTURE_2D, disp->texture[0]);
-	/* Indicate that GL_TEXTURE0 is s_luma_texture from previous lookup */
-	glUniform1i(disp->location[0], 0);
-
-	/*
-	 * Copy the chroma data from plane 1 to the s_chroma_texture texture in the GPU.
-	 * Each texture has four components, x,y,z,w alias r,g,b,a alias s,r,t,u.
-	 * Cb is will be replicated in x, y, and z. Cr will be assigned to w. with type GL_LUMINANCE_ALPHA.
-	 * There is one pair of chroma values for every four luma pixels.
-	 * Half the vertical resoulution and half the horizontal resolution.
-	 * Each GL_LUMINCANCE_ALPHA lookup will contain one pixel of chroma.
-	 * The texture lookup will replicate the chroma values up to the total resolution.
-	 */
-	glActiveTexture(GL_TEXTURE1);
-	glTexSubImage2D(GL_TEXTURE_2D, 0,
-		0, 0, disp->width, disp->height,
-		GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE,  b->ptr[0] + (disp->width * disp->height));
-	error = glGetError();
-	glBindTexture(GL_TEXTURE_2D, disp->texture[1]);
-	/* Indicate that GL_TEXTURE1 is s_chroma_texture from previous lookup */
-	glUniform1i(disp->location[1], 1);
-
-	/*
-	 * Draw the two triangles from 6 indices to form a rectangle from the data in the vertex array.
-	 * The fourth parameter, indices value here is passed as null since the values are already
-	 * available in the GPU memory through the vertex array
-	 * GL_TRIANGLES - draw each set of three vertices as an individual trianvle.
-	 */
-	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
-	/** Select the default vertex array, allowing the applications array to be unbound */
-	glBindVertexArray(0);
-
-	/*
-	 * display the new camera frame after render is complete at the next vertical sync
-	 * This is drawn on the EGL surface which matches the full screen native window.
-	 */
-	ret = eglSwapBuffers(disp->eglDpy, disp->eglSurf);
+    glBindTexture(GL_TEXTURE_EXTERNAL_OES, b->texture);
+    glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
+    eglSwapBuffers(disp->eglDpy, disp->eglSurf);
 
     return CSTATUS_SUCCESS;
 }
