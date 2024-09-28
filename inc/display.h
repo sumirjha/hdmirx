@@ -43,7 +43,7 @@ typedef struct
         /** The handle to the compiled shader program */
         GLuint program;
 
-		char *					dummy;
+		unsigned char *					frameData;
 }Display_t;
 
 

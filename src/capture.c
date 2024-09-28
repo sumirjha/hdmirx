@@ -113,8 +113,8 @@ CStatus_t capAllocateBuffers(App_t *app, int nums)
 			app->buffers[i].offset[j] = buf.m.planes[j].data_offset;
 		}
 
-		ret = displayInitBuffer(app->viewer, &app->buffers[i]);
-		OKAY_RETURN(CSTATUS_SUCCESS != ret, CSTATUS_FAIL, "failed to create gl texture\n");
+		// ret = displayInitBuffer(app->viewer, &app->buffers[i]);
+		// OKAY_RETURN(CSTATUS_SUCCESS != ret, CSTATUS_FAIL, "failed to create gl texture\n");
 
 		// MppBufferInfo info;
 		// memset(&info, 0, sizeof(MppBufferInfo));
