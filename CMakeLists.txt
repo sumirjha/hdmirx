@@ -8,9 +8,23 @@ project(
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-include_directories(inc)
+add_library(utilities "")
 
-add_executable(capture src/capture.c src/display.c src/gles_util.c)
+include_directories(inc)
+include_directories(src/libardmpegts/inc)
+
+add_subdirectory(src/libardmpegts)
+
+add_executable(
+	capture
+	src/capture.c
+	src/display.c
+	src/gles_util.c
+	src/encoder.c 
+	src/encoder_utils.c
+	src/list_common.c
+	src/network.c	
+)
 set_target_properties(capture PROPERTIES LINKER_LANGUAGE CXX)
 
-target_link_libraries(capture PRIVATE EGL GL X11 m)
+target_link_libraries(capture PRIVATE utilities EGL GL X11 rockchip_mpp m)

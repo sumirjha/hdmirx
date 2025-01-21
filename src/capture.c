@@ -1,6 +1,58 @@
 #include "common.h"
 #include "capture.h"
+#include "mpeg-ts.h"
+#include "mpeg-ts-proto.h"
+#include "list_common.h"
+#include "network.h"
+#include "websock.h"
 
+//Packetiser
+static void* tsAlloc(void* param, size_t bytes)
+{
+    
+    App_t *app = (App_t *) param;
+    if(bytes > TS_PACKET_SIZE || bytes <=0)
+    {
+        printf("TS h264 packetizer asked for buffer of size more than\
+                    that can be given, ask - %d, possible - %d\n", bytes, TS_PACKET_SIZE);
+        return NULL;
+    }
+
+    NetBuffer_t *buf = NULL;
+	LIST_POP_FRONT(buf, &app->qFree, link);
+	if(NULL == buf)
+	{
+		printf("failed to get any new free buffer\n");
+		return NULL;
+	}
+
+	listInsert(&app->qSend, &buf->link);
+	app->qSendCount++;
+
+	buf->size = bytes;
+	return buf->buffer;
+}
+
+static void tsFreePacket(void* param, void *packet)
+{
+    UNUSED_PARAMETER(param);
+    UNUSED_PARAMETER(packet);
+}
+
+
+int tsWrite(void* param, const void* packet, size_t bytes)
+{
+    UNUSED_PARAMETER(param);
+    UNUSED_PARAMETER(packet);
+    UNUSED_PARAMETER(bytes);
+    return 0;
+}
+
+static struct mpeg_ts_func_t mpegHandler = {
+    .alloc = tsAlloc,
+    .free = tsFreePacket,
+    .write = tsWrite,
+};
 
 
 CStatus_t capCreateViewer(App_t *app)
@@ -113,8 +165,8 @@ CStatus_t capAllocateBuffers(App_t *app, int nums)
 			app->buffers[i].offset[j] = buf.m.planes[j].data_offset;
 		}
 
-		ret = displayInitBuffer(app->viewer, &app->buffers[i]);
-		OKAY_RETURN(CSTATUS_SUCCESS != ret, CSTATUS_FAIL, "failed to create gl texture\n");
+		// ret = displayInitBuffer(app->viewer, &app->buffers[i]);
+		// OKAY_RETURN(CSTATUS_SUCCESS != ret, CSTATUS_FAIL, "failed to create gl texture\n");
 
 		// MppBufferInfo info;
 		// memset(&info, 0, sizeof(MppBufferInfo));
@@ -225,6 +277,84 @@ CStatus_t capStreamStop(App_t *app)
 	return CSTATUS_SUCCESS;
 }
 
+static void encoderHandler_NewPacket(unsigned char * data, int len, void *udata)
+{
+	App_t *app = udata;
+	//printf("new encoded packet received : %d bytes\n", len);
+	app->qSendCount = 0;
+	int retVal =  mpeg_ts_write(app->ts, app->tsStreamId, 0, 0, 0, (const void *)data, len);
+	if(retVal != 0)
+	{
+		printf("failed to packetize buffer (%d bytes) into ts payload. error : %d\n", len, retVal);
+	}
+	else
+	{
+		//Successfull
+		NetConWrapper_t *w = NULL, *_w = NULL;
+		LIST_FOR_EACH_SAFE(w, _w, &app->lConnections, link)
+		{
+			NetBuffer_t * buf = NULL, *_buf = NULL;
+			LIST_FOR_EACH_SAFE(buf, _buf, &app->qSend, link)
+			{
+				if(-1 == netConSend(w->con, buf))
+				{
+					break;
+				}
+			}
+		}
+	}
+
+	while (1)
+	{
+		NetBuffer_t * buf = NULL;
+		LIST_POP_FRONT(buf, &app->qSend, link);
+
+		//If NULL then there are no more packet left in queue
+		if(NULL == buf)
+		{
+			break;
+		}	
+
+		listInsertBack(&app->qFree, &buf->link);
+	}
+
+}
+
+EncoderInterface_t encInterface = {
+	.NewPacket = encoderHandler_NewPacket,
+};
+
+
+// static void netConHandler_Close(NetCon_t *con, void *udata)
+// {
+// 	App_t *app = udata;
+// 	NetConWrapper_t *w = NULL, *_w = NULL;
+// 	LIST_FOR_EACH_SAFE(w, _w, &app->lConnections, link)
+// 	{
+// 		if(w->con == con)
+// 		{
+// 			listRemove(&w->link);
+// 		}
+// 	}
+// }
+
+// NetConInterface_t netConInterface = {
+// 	.Close = netConHandler_Close,
+// };
+
+// static void netHandler_NewClient(NetCon_t *con, void *udata)
+// {
+// 	App_t *app = udata;
+// 	netConnInit(con, &netConInterface, app);
+// 	NetConWrapper_t *w = calloc(1, sizeof(NetConWrapper_t));
+// 	listInsert(&app->lConnections, &w->link);
+// 	w->con = con;
+// }
+
+// NetInterface_t netInterface = {
+// 	.NewClient = netHandler_NewClient,
+// };
+
 int main()
 {
 	App_t app = {0};
@@ -237,6 +367,59 @@ int main()
 	app.src.numBufs = DMA_BUFF_COUNT;
 	app.memType = V4L2_MEMORY_MMAP;
 	app.bufType = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+	clock_gettime(CLOCK_REALTIME, &app.tsLastTick);
+	app.frameCount = 0;
+
+	listInit(&app.qSend);
+	listInit(&app.qFree);
+	listInit(&app.lConnections);
+
+	// NetConfig_t nConfig = {
+	// 	.port = 6700,
+	// };
+	
+	// app.net = netCreate(&nConfig, &netInterface, &app);
+	// OKAY_RETURN(app.net == NULL, 0, "failed to create network\n");
+
+	Websock_t *sock = websockCreate()
+
+	app.netBuffer = calloc(sizeof(NetBuffer_t), TS_TOTAL_PACKET);
+	OKAY_RETURN(app.netBuffer == NULL, 0, "failed to allocate network buffer\n");
+	for(int i =0; i < TS_TOTAL_PACKET; i++)
+	{
+		NetBuffer_t *buf = (NetBuffer_t *)((uint8_t *)app.netBuffer + (i * sizeof(NetBuffer_t)));
+		buf->size = 0;
+		buf->capacity = TS_PACKET_SIZE;
+		listInsert(&app.qFree, &buf->link);
+	}
+
+	//Setup TS Mxer
+	app.ts = mpeg_ts_create(&mpegHandler, &app);
+    if(app.ts == NULL)
+    {
+        printf("failed to create TS packetizer\n");
+		free(app.netBuffer);
+        return 0;
+    }
+
+    if((app.tsStreamId = mpeg_ts_add_stream(app.ts, PSI_STREAM_H264, NULL, 0)) <= 0)
+    {
+        printf("failed to add ts stream at packetizer\n");
+        return 0;
+    }
+
+	EncoderConfig_t encConfig = {
+		.birate = 1000000,
+		.fps = 60,
+		.gop = 60,
+		.width = app.src.width,
+		.height = app.src.height,
+		.horStride = app.src.width,
+		.verStride = app.src.height,
+	};
+
+	app.enc = encoderCreate(&encConfig, &encInterface, &app);
+	OKAY_RETURN(app.enc == NULL, 0, "failed to create encoder device\n");
 
 	do{
 		CStatus_t status;
@@ -270,16 +453,18 @@ int main()
 		bool quit = false;
 		while (!quit)
 		{
-			fd_set read_fds;
+			fd_set read_fds[2];
 			fd_set exception_fds;
 			struct timeval tv = { 2, 0 };
 			int r;
 
 			FD_ZERO(&exception_fds);
 			FD_SET(app.v4l2fd, &exception_fds);
-			FD_ZERO(&read_fds);
-			FD_SET(app.v4l2fd, &read_fds);
-			r = select(app.v4l2fd + 1, &read_fds, NULL, &exception_fds, &tv);
+			FD_ZERO(read_fds);
+			FD_SET(app.v4l2fd, read_fds);
+			int netFd = netGetFd(app.net);
+			FD_SET(netFd, read_fds);
+			r = select(((app.v4l2fd > netFd)?app.v4l2fd:netFd) + 1, read_fds, NULL, &exception_fds, &tv);
 			
 			if (FD_ISSET(app.v4l2fd, &exception_fds))
 			{
@@ -287,7 +472,7 @@ int main()
 				break;
 			}
 
-			if (FD_ISSET(app.v4l2fd, &read_fds))
+			if (FD_ISSET(app.v4l2fd, read_fds))
 			{
 				Buffer_t *buf1 = NULL;
 				status = capDequeue(&app, &buf1);
@@ -295,9 +480,26 @@ int main()
 				{ continue; }
 				else if(CSTATUS_SUCCESS == status)
 				{
-					//TODO: Check return of Update Texture
-					capDrawFrameFromBufferIndex(&app, buf1->index);
 
+					//TODO: Check return of Update Texture
+					//capDrawFrameFromBufferIndex(&app, buf1->index);
+					app.frameCount++;
+
+					struct timespec now;
+					double start_sec, end_sec, elapsed_sec;
+					clock_gettime(CLOCK_REALTIME, &now);
+
+					end_sec = now.tv_sec + now.tv_nsec / NANO_PER_SEC;
+					start_sec = app.tsLastTick.tv_sec + app.tsLastTick.tv_nsec / NANO_PER_SEC;
+					elapsed_sec = end_sec - start_sec;
+
+					if(elapsed_sec >= 1)
+					{
+						app.tsLastTick = now;
+						printf("Frames/Sec : %d\n", app.frameCount);
+						app.frameCount = 0;;
+					}
+					encoderPutFrame(app.enc, buf1);
 					status = capQueueByIndex(&app, buf1->index);
 					OKAY_STOP(status != CSTATUS_SUCCESS, "failed to enqueue : %d\n", buf1->index);
 				}
@@ -305,6 +507,10 @@ int main()
 				{
 					printf("Dequeue Failed\n");
 				}
+			}
+			else if (FD_ISSET(netFd, read_fds))
+			{
+				netDispatch(app.net);
 			}
 		}
 		capStreamStop(&app);
@@ -315,6 +521,28 @@ int main()
 	if(app.v4l2fd >= 0)
 	{
 		close(app.v4l2fd);
+	}
+
+	if(app.enc != NULL)
+	{
+		encoderDestroy(app.enc);
+	}
+
+	if(app.net != NULL)
+	{
+		NetConWrapper_t *w = NULL, *_w = NULL;
+		LIST_FOR_EACH_SAFE(w, _w, &app.lConnections, link)
+		{
+			listRemove(&w->link);
+			netConClose(w->con);
+			free(w);
+		}
+		netDestroy(app.net);
+	}
+
+	if(app.netBuffer != NULL)
+	{
+		free(app.netBuffer);
 	}
 
 	return 0;
