@@ -127,6 +127,12 @@ if (cond) { \
 	break; \
 }
 
+#define TS_PACKET_SIZE 	188
+#define TS_TOTAL_PACKET	2048
+#define NANO_PER_SEC 1000000000.0
+
+#define UNUSED_PARAMETER(x) (void)x
+
 
 
 const char* string_egl_error(EGLint error);

@@ -2,6 +2,7 @@
 #define __BUFFER_H__
 
 #include "common.h"
+#include "list_common.h"
 
 typedef struct {
 	int					index;
@@ -16,6 +17,14 @@ typedef struct {
 	EGLImage 			image;
 }Buffer_t;
 
+typedef struct
+{
+	int			capacity;
+	int			size;
+	int			offset;
+	uint8_t 	buffer[TS_PACKET_SIZE];
+	List_t		link;
+}NetBuffer_t;
 
 
 #endif
